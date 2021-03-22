@@ -3,6 +3,7 @@
  *  Description:    Contains function protos and defines for shm_racer.c/consumers
  */
 #include <pthread.h>
+#include "shmlib.h"
 #define MAX_SUPPORTED_THREADS 2
 
 typedef enum {

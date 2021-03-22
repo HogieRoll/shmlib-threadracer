@@ -6,17 +6,23 @@
 //#include "threadset.h"
 #include <stdio.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <pthread.h>
+#include <unistd.h>
 #include "shm_racer.h"
 
-static int value = 32;
+int value = 32;
 
 void helloWorld(void *args) {
     printf("Hello World\n");
 }
 void setValue(void *args) {
     int tmp = value;
-    value = tmp + 1;    
+    SHM_OP(SHM_READ, cnt_data.cnt_x, tmp);
+    for(int i = 0; i < 30; i++) {
+        tmp = tmp + 1;
+        SHM_OP(SHM_WRITE, cnt_data.cnt_x, tmp);
+    }
 }
 volatile int running_threads = 0;
 pthread_mutex_t running_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -65,7 +71,7 @@ static sThreadSet threadset_table[NUM_THREAD_SETS] = {
             .start_routine = &pthread_helper,
             .arg = &(pthread_helper_table[RUN_FUNC_COUNTER_RACE])
         },
-        .timeout = 30
+        .timeout = 60
     }
 };
 static bool cancel_thd_set(sThreadSet *thd_set) {
