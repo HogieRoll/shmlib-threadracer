@@ -4,19 +4,34 @@
  */
 #include <pthread.h>
 #include "shmlib.h"
-#define MAX_SUPPORTED_THREADS 2
+#define MAX_SUPPORTED_THREADS 5
 
 typedef enum {
-    RUN_FUNC_HELLO_WORLD,
+    RUN_FUNC_EMPTY,
     RUN_FUNC_COUNTER_RACE,
     RUN_FUNC_COUNTER_SAFE,
+    RUN_FUNC_READ_RACE,
+    RUN_FUNC_RMW_RACE,
+    RUN_FUNC_RMW_SAFE,
+    RUN_FUNC_RMW_FIRST,
+    RUN_FUNC_RMW_SECOND,
+    RUN_FUNC_RMW_FAKE_SECOND,
+    RUN_FUNC_MAILMAN,
+    RUN_FUNC_MAILCUSTOMER,
     NUM_RUN_FUNCS
 }eRunFuncs;
 typedef enum {
-    THREAD_SET_HELLO_WORLD_SINGLE = 0,
-    THREAD_SET_HELLO_WORLD_DOUBLE,
+    THREAD_SET_EMPTY_SINGLE = 0,
+    THREAD_SET_EMPTY_DOUBLE,
     THREAD_SET_COUNTER_RACE_DOUBLE,
     THREAD_SET_COUNTER_SAFE_DOUBLE,
+    THREAD_SET_COUNTER_MIXED,
+    THREAD_SET_READ_RACE_DOUBLE,
+    THREAD_SET_RMW_RACE_DOUBLE,
+    THREAD_SET_RMW_SAFE_DOUBLE,
+    THREAD_SET_RMW_HB_DOUBLE,
+    THREAD_SET_MAILMAN,
+    THREAD_SET_RMW_RACE_MAX,
     NUM_THREAD_SETS
 }eThreadSet;
 typedef struct {
@@ -24,12 +39,16 @@ typedef struct {
     void *(*start_routine) (void *);
     void *arg;
 }sThreadInfo;
+#define MAX_SET_STR_SIZE 80
 typedef struct {
     sThreadInfo threadInfo[MAX_SUPPORTED_THREADS];
     int timeout;//specifies how long to wait for this thread set to finish
+    char set_str[MAX_SET_STR_SIZE];
 }sThreadSet;
+#define MAX_FUNC_STR_SIZE 80
 typedef struct {
     void (*start_routine) (void *);
+    char func_str[MAX_FUNC_STR_SIZE];
 }sPthreadHelper;
 
 

@@ -11,15 +11,22 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <errno.h>
+#include <semaphore.h>
 #include "shmlib.h"
 #include "shm_racer.h"
 
 pthread_mutex_t shm_access_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t running_mutex = PTHREAD_MUTEX_INITIALIZER;
+sem_t x_to_y_mutex;
+
 volatile int running_threads = 0;
 
-void helloWorld(void *args) {
-    printf("Hello World\n");
+void empty(void *args) {
+    //do nothing
+}
+void readValue(void *args) {
+    int tmp = 0;
+    SHM_OP(SHM_READ, cnt_data.cnt_x, tmp);
 }
 void setValue(void *args) {
     int tmp = 0;
@@ -35,6 +42,56 @@ void setValue_safe(void *args) {
     pthread_mutex_unlock(&shm_access_mutex);
 }
 
+void readModifyWrite(void *args) {
+    uint8_t tmp = 0;
+    SHM_OP(SHM_READ, a, tmp);
+    tmp |= 0x20;
+    SHM_OP(SHM_WRITE, a, tmp);
+}
+
+void readModifyWrite_first(void *args) {
+    readModifyWrite(NULL);
+    sem_post(&x_to_y_mutex);
+}
+void readModifyWrite_second(void *args) {
+    sem_wait(&x_to_y_mutex);
+    readModifyWrite(NULL);
+}
+void readModifyWrite_foolhb(void *args) {
+    sleep(2);
+    readModifyWrite(NULL);
+}
+
+void readModifyWrite_safe(void *args) {
+    pthread_mutex_lock(&shm_access_mutex);
+    readModifyWrite(NULL);
+    pthread_mutex_unlock(&shm_access_mutex);
+}
+
+void mailman(void *args) {
+	for(uint32_t time_sec = 0; time_sec < 100; time_sec++) {
+	    if(0 == time_sec % 33) {
+	        //put mail into a mailbox
+	        uint8_t num_p = 0;
+	        SHM_OP(SHM_READ, num_parcels, num_p);
+	        num_p++;
+	        SHM_OP(SHM_WRITE, num_parcels, num_p);
+	    }
+	    //sleep(1);
+	}
+}
+void mail_customer(void *args) {
+	for(uint32_t time_sec = 0; time_sec < 100; time_sec++) {
+	    if(25 == time_sec || 75 == time_sec) {
+	        uint8_t num_p = 0;
+	        SHM_OP(SHM_READ, num_parcels, num_p);
+	        num_p = 0;//they pick up all mail from their mailbox
+	        SHM_OP(SHM_WRITE, num_parcels, num_p);
+	    }
+	    //sleep(1);
+	}
+}
+
 static inline void Xcrement_thread_count(bool increment) {
     pthread_mutex_lock(&running_mutex);
     running_threads+=(increment)?1:-1;
@@ -47,53 +104,84 @@ void *pthread_helper(void *args) {
     Xcrement_thread_count(false);
     return NULL;
 }
+#define PTHREAD_HELPER_BUILDER(func_name, start_func)\
+    [func_name] = {.start_routine=&start_func, .func_str=#func_name}
+
 static sPthreadHelper pthread_helper_table[NUM_RUN_FUNCS] = {
-    [RUN_FUNC_HELLO_WORLD] = {.start_routine = &helloWorld},
-    [RUN_FUNC_COUNTER_RACE] = {.start_routine = &setValue},
-    [RUN_FUNC_COUNTER_SAFE] = {.start_routine = &setValue_safe}
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_EMPTY, empty),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_COUNTER_RACE, setValue),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_COUNTER_SAFE, setValue_safe),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_READ_RACE, readValue),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_RMW_RACE, readModifyWrite),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_RMW_SAFE, readModifyWrite_safe),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_RMW_FIRST, readModifyWrite_first),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_RMW_SECOND, readModifyWrite_second),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_RMW_FAKE_SECOND, readModifyWrite_foolhb),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_MAILMAN, mailman),
+    PTHREAD_HELPER_BUILDER(RUN_FUNC_MAILCUSTOMER, mail_customer)
 };
+
+#define THREAD_FUNC_BUILDER(thread_idx, func_type)\
+    .threadInfo[thread_idx] = { \
+        .start_routine = &pthread_helper,\
+        .arg = &(pthread_helper_table[func_type])\
+    }
+#define THREAD_SET_BUILDER(thread_set_idx, time_out)\
+    [thread_set_idx] = {\
+        .timeout = time_out,\
+        .set_str = #thread_set_idx,
+
 static sThreadSet threadset_table[NUM_THREAD_SETS] = {
-    [THREAD_SET_HELLO_WORLD_SINGLE] = {
-        .threadInfo[0] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_HELLO_WORLD])
-        },
-        .timeout = 30
+    THREAD_SET_BUILDER(THREAD_SET_EMPTY_SINGLE, 30)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_EMPTY),
     },
-    [THREAD_SET_HELLO_WORLD_DOUBLE] = {
-        .threadInfo[0] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_HELLO_WORLD])
-        },
-        .threadInfo[1] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_HELLO_WORLD])
-        },
-        .timeout = 30
+    THREAD_SET_BUILDER(THREAD_SET_EMPTY_DOUBLE, 30)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_EMPTY),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_EMPTY)
     },
-    [THREAD_SET_COUNTER_RACE_DOUBLE] = {
-        .threadInfo[0] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_COUNTER_RACE])
-        },
-        .threadInfo[1] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_COUNTER_RACE])
-        },
-        .timeout = 60
+    THREAD_SET_BUILDER(THREAD_SET_COUNTER_RACE_DOUBLE, 60)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_COUNTER_RACE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_COUNTER_RACE)
     },
-    [THREAD_SET_COUNTER_SAFE_DOUBLE] = {
-        .threadInfo[0] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_COUNTER_SAFE])
-        },
-        .threadInfo[1] = {
-            .start_routine = &pthread_helper,
-            .arg = &(pthread_helper_table[RUN_FUNC_COUNTER_SAFE])
-        },
-        .timeout = 60
+    THREAD_SET_BUILDER(THREAD_SET_COUNTER_SAFE_DOUBLE, 80)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_COUNTER_SAFE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_COUNTER_SAFE)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_COUNTER_MIXED, 80)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_COUNTER_SAFE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_COUNTER_RACE)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_READ_RACE_DOUBLE, 60)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_READ_RACE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_READ_RACE)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_RMW_RACE_DOUBLE, 20)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_RACE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_RACE)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_RMW_SAFE_DOUBLE, 20)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_SAFE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_SAFE)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_RMW_HB_DOUBLE, 20)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_FIRST),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_SECOND)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_MAILMAN, 100)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_MAILMAN),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_MAILCUSTOMER)
+    },
+    THREAD_SET_BUILDER(THREAD_SET_RMW_RACE_MAX, 100)
+        THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_RACE),
+        THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_RACE),
+        THREAD_FUNC_BUILDER(2, RUN_FUNC_RMW_RACE),
+        THREAD_FUNC_BUILDER(3, RUN_FUNC_RMW_RACE),
+        THREAD_FUNC_BUILDER(4, RUN_FUNC_RMW_RACE)
     }
 };
+const char * get_thread_set_str(eThreadSet thd_set_idx) {
+    return threadset_table[thd_set_idx].set_str;
+}
 static bool cancel_thd_set(sThreadSet *thd_set) {
     for(int thd_idx = 0; thd_idx < MAX_SUPPORTED_THREADS; thd_idx++) {
         sThreadInfo *thd_info = &(thd_set->threadInfo[thd_idx]);
@@ -101,7 +189,7 @@ static bool cancel_thd_set(sThreadSet *thd_set) {
         if(0 == thd_info->threadId) {
             continue;
         } else if(0 != (err = pthread_cancel(thd_info->threadId))) {
-            printf("Error Cancelling Pthread: err: %d\n",err);
+            //printf("Error Cancelling Pthread: err: %d\n",err);
             if(ESRCH == err) {
                 Xcrement_thread_count(false);
                 continue;
@@ -109,7 +197,7 @@ static bool cancel_thd_set(sThreadSet *thd_set) {
                 return false;
             }
         } else {
-            printf("Cancelled Pthread\n");
+            //printf("Cancelled Pthread\n");
             Xcrement_thread_count(false);
         }
     }
@@ -118,6 +206,7 @@ static bool cancel_thd_set(sThreadSet *thd_set) {
 static void init_locks() {
     pthread_mutex_init(&shm_access_mutex, NULL);
     pthread_mutex_init(&running_mutex, NULL);
+    sem_init(&x_to_y_mutex, 0 , 0);
 }
 static void spawn_thread_set(sThreadSet *thd_set) {
     clearall_traps();
@@ -135,7 +224,7 @@ static void spawn_thread_set(sThreadSet *thd_set) {
                 //printf("Successfully created thread\n");
             }
         } else {
-            printf("Empty Function\n");
+            //printf("Empty Function\n");
         }
     }
 }
@@ -170,9 +259,9 @@ int main() {
         uint32_t runtime_counter = 0;
         spawn_thread_set(thd_set);
         if(WAIT_THREAD_SET_OK == (wait_status = wait_thread_set(thd_set, &runtime_counter))) {
-            printf("SETCOMPLETE:%d:%d\n",thd_set_idx,runtime_counter);
+            printf("SETCOMPLETE:%s:%d\n",get_thread_set_str(thd_set_idx),runtime_counter);
         } else if(WAIT_THREAD_SET_TIMEOUT == wait_status) {
-            printf("SETCOMPLETE_TO:%d:%d\n",thd_set_idx,runtime_counter);
+            printf("SETCOMPLETE_TO:%s:%d\n",get_thread_set_str(thd_set_idx),runtime_counter);
         } else {
             printf("FAILURE_WAIT\n");
             return -1;

@@ -133,7 +133,7 @@ static int set_trap(eRW readWrite, size_t offset,
             thd_trap_info->trap_offsets[TRAP_HIGH] = offset + size - 1;
             thd_trap_info->trap_offsets[TRAP_LOW] = offset;
             thd_trap_info->info = info;
-            return 1;
+            return DEFAULT_DELAY;
         }
     }
     return 0;
@@ -177,7 +177,9 @@ eSHMRC shm_op(eRW readWrite, void *buf,
         sleep_time = set_trap(readWrite, offset, size, info);
         pthread_mutex_unlock(&shm_mutex);
 
-        sleep(sleep_time);
+        if(sleep_time) {
+            usleep(sleep_time);
+        }
 
         pthread_mutex_lock(&shm_mutex);
         clear_traps();

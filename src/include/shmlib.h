@@ -7,9 +7,11 @@
 
 #include <bsd/string.h>
 
-#define MAX_SHM_TRAPS 2
+#define MAX_SHM_TRAPS 5
 
 #define NEAR_MISS_THRESHOLD 5
+#define DEFAULT_DELAY 10000000//1000000
+
 
 #include <stdbool.h>
 #include <pthread.h>
@@ -50,6 +52,8 @@ typedef struct {
 }sCounters;
 typedef struct {
     sCounters cnt_data;
+    uint8_t a;
+    uint8_t num_parcels;
 }sSHM;
 eSHMRC shm_op(eRW readWrite, void *buf,
               size_t buf_size, size_t offset,
