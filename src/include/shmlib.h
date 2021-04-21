@@ -6,12 +6,13 @@
 #define SHMLIB_H
 
 #include <bsd/string.h>
+#include <sys/time.h>
 
 #define MAX_SHM_TRAPS 5
 
-#define NEAR_MISS_THRESHOLD 5
-#define DEFAULT_DELAY 10000000//1000000
-
+#define MS_SEC_CONVERSION 1000000
+#define NEAR_MISS_THRESHOLD 5 * MS_SEC_CONVERSION//useconds
+#define DEFAULT_DELAY 100//useconds
 
 #include <stdbool.h>
 #include <pthread.h>
@@ -32,11 +33,21 @@ typedef enum {
     NUM_TRAP_RANGES
 }eTrapRange;
 typedef struct {
-    pthread_t threadId;
+    uint32_t thread_idx;
     size_t trap_offsets[NUM_TRAP_RANGES];
     eTrapType trap_type;
     char *info;
 }sThreadTrapInfo;
+
+typedef struct {
+    uint32_t thread_idx;
+    size_t shm_offsets[NUM_TRAP_RANGES];
+    eRW rw;
+    char *info;
+    uint64_t access_time_s;//time in seconds
+    uint64_t access_time_us;//time in useconds
+}sSHMAccessLog;
+
 typedef struct {
     sThreadTrapInfo thread_trap_info[MAX_SHM_TRAPS];
 }sSHMTrapper;
@@ -57,7 +68,7 @@ typedef struct {
 }sSHM;
 eSHMRC shm_op(eRW readWrite, void *buf,
               size_t buf_size, size_t offset,
-              size_t size, char *info);
+              size_t size, char *info, uint32_t thd_idx);
 
 #define INFO_STR_MAX_SIZE 75
 #define MAX_LINE_NUM_DIGITS 10
@@ -77,10 +88,12 @@ static char *get_info_str(char *info_str, const char* file, const char* func, in
     char info_str[INFO_STR_MAX_SIZE] = {0}; \
     shm_op(rw, &buf, sizeof(buf), \
     offsetof(sSHM, member), sizeof(((sSHM *)0)->member), \
-    get_info_str(info_str, __FILE__, __func__, __LINE__)); \
+    get_info_str(info_str, __FILE__, __func__, __LINE__), \
+    *((uint32_t *)args)); \
 }
 
 void clearall_traps();
 void clearall_loghashes();
+void reset_access_log();
 
 #endif

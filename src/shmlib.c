@@ -65,15 +65,15 @@ const char *race_violation_str[NUM_RACE_VIOLATION_TYPES] = {
     [RACE_VIOLATION_RAW] = "RAW",
     [RACE_VIOLATION_WAW] = "WAW"
 };
-static void trap_violation_logger(eRaceViolationType race_violation_type, sThreadTrapInfo *thd_trap_info, char *info) {
+static void trap_violation_logger(eRaceViolationType race_violation_type, sThreadTrapInfo *thd_trap_info, char *info, uint32_t thread_idx) {
     char msg_key[MAX_RACE_ERROR_MSG_SIZE] = {0};
     struct HashLoggedHazard *logged_hazard = NULL;
 
     snprintf(msg_key, MAX_RACE_ERROR_MSG_SIZE,
-             "[%ld]: %s %s [%ld]: %s",
-             pthread_self(), info,
+             "[%u]: %s %s [%u]: %s",
+             thread_idx, info,
              race_violation_str[race_violation_type],
-             thd_trap_info->threadId, thd_trap_info->info);
+             thd_trap_info->thread_idx, thd_trap_info->info);
     if(NULL == (logged_hazard = find_logged_hazards(msg_key))) {
         add_logged_hazard(msg_key);
         printf("%s\n",msg_key);
@@ -81,27 +81,26 @@ static void trap_violation_logger(eRaceViolationType race_violation_type, sThrea
         logged_hazard->logged_count++;
     }
 }
-static void find_trap_violations(eRW readWrite, size_t offset,
-                                 size_t size, char *info) {
+static void find_trap_violations(eRW readWrite, size_t offset, size_t size, char *info, uint32_t thread_idx) {
     for(int thd_idx = 0; thd_idx < MAX_SHM_TRAPS; thd_idx++) {
         sThreadTrapInfo *thd_trap_info = &(shm_trapper.thread_trap_info[thd_idx]);
-        if((0 != thd_trap_info->threadId)
-        && (pthread_self() != thd_trap_info->threadId)
+        if((0 != thd_trap_info->thread_idx)
+        && (thread_idx != thd_trap_info->thread_idx)
         && isWithinTrapOffset(thd_trap_info, offset, size)) {
             switch(thd_trap_info->trap_type) {
                 case TRAP_TYPE_READ: {
                     if(SHM_READ == readWrite) {
                         //RAR is not a race hazard
                     } else {
-                        trap_violation_logger(RACE_VIOLATION_WAR, thd_trap_info, info);
+                        trap_violation_logger(RACE_VIOLATION_WAR, thd_trap_info, info, thread_idx);
                     }
                     break;
                 }
                 case TRAP_TYPE_WRITE: {
                     if(SHM_READ == readWrite) {
-                        trap_violation_logger(RACE_VIOLATION_RAW, thd_trap_info, info);
+                        trap_violation_logger(RACE_VIOLATION_RAW, thd_trap_info, info, thread_idx);
                     } else {
-                        trap_violation_logger(RACE_VIOLATION_WAW, thd_trap_info, info);
+                        trap_violation_logger(RACE_VIOLATION_WAW, thd_trap_info, info, thread_idx);
                     }
                     break;
                 }
@@ -114,21 +113,84 @@ static void find_trap_violations(eRW readWrite, size_t offset,
 static void find_near_misses(eRW readWrite, size_t offset,
                              size_t size, char *info) {
 }
+
+#define MAX_ACCESS_LOG_ENTRIES 1000
+//indicates where the next access will go in the log
+static uint32_t shm_access_log_idx = 0;
+//log of shm accesses(gets flushed on demand with each SHM_OP)
+static sSHMAccessLog shm_access_log[MAX_ACCESS_LOG_ENTRIES] = {0};
+
+/*
+ * @brief:  Function logs SHM_OP accesses
+ */
+static void log_access(eRW readWrite, size_t offset, size_t size, char *info, uint32_t thread_idx) {
+    if(shm_access_log_idx < MAX_ACCESS_LOG_ENTRIES) {
+        printf("Logging Access\n");
+        struct timeval timestamp = {0};
+        gettimeofday(&timestamp, NULL);
+        sSHMAccessLog access_log = {
+            .thread_idx = thread_idx,
+            .rw = readWrite,
+            .shm_offsets[TRAP_HIGH] = offset + size - 1,
+            .shm_offsets[TRAP_LOW] = offset,
+            .info = info,
+            .access_time_s = timestamp.tv_sec,
+            .access_time_us = timestamp.tv_usec
+        };
+        memcpy(&(shm_access_log[shm_access_log_idx]), &access_log, sizeof(sSHMAccessLog));
+        shm_access_log_idx++;
+    } else {
+        printf("Could Not Log Access\n");
+    }
+}
+static void flush_access_log() {
+    if(0 == shm_access_log_idx) {
+        return;//nothing to flush
+    }
+    struct timeval timestamp = {0};
+    gettimeofday(&timestamp, NULL);//MS_SEC_CONVERSION)
+    uint64_t current_time_s = timestamp.tv_sec;
+    uint64_t current_time_us = timestamp.tv_usec;
+
+    uint32_t shm_scan_start_idx = MIN(shm_access_log_idx - 1, MAX_ACCESS_LOG_ENTRIES - 1);
+    uint32_t num_valid_shm_logs = 0;
+    for(uint32_t shm_scan_idx = shm_scan_start_idx; shm_scan_idx >= 0; shm_scan_idx--) {
+        uint64_t delta_s = current_time_s - shm_access_log[shm_scan_idx].access_time_s;
+        uint64_t delta_us = current_time_us - shm_access_log[shm_scan_idx].access_time_us;
+        delta_us = ((delta_s) * MS_SEC_CONVERSION) + delta_us;
+        if(NEAR_MISS_THRESHOLD < delta_us) {
+            memcpy(shm_access_log, &(shm_access_log[shm_scan_idx + 1]), sizeof(sSHMAccessLog) * num_valid_shm_logs);
+            shm_access_log_idx = 0;
+            break;
+        } else {
+            num_valid_shm_logs++;
+            if(0 >= shm_scan_idx) {
+                break;
+            }
+        }
+    }
+}
+void reset_access_log() {
+    memset(shm_access_log, 0, sizeof(sSHMAccessLog) * MAX_ACCESS_LOG_ENTRIES);
+    shm_access_log_idx = 0;
+}
+static void print_access_log() {
+    for(uint32_t shm_scan_idx = 0; shm_scan_idx < shm_access_log_idx; shm_scan_idx++) {
+        sSHMAccessLog *access_log = &(shm_access_log[shm_scan_idx]);
+        printf("[%lu]: T:[%u] R/W:[%s], [%s]\n",access_log->access_time_s,
+                                                access_log->thread_idx,
+                                                access_log->rw ? "W":"R",
+                                                access_log->info);
+    }
+}
 /*
  * @brief: Sets a trap, returns the amount of time the trap will be
  */
-static int set_trap(eRW readWrite, size_t offset,
-                    size_t size, char *info) {
-    //TODO: determine trap delay
-    //have we seen this trap before? (same thread, same memory offsets)
-    //are there any potential violations left from other threads?
-    //are there any potential violations left when considering happens before relationships?
-    //are there any near misses that should motivate a delay here?
-    //or are those near misses already exposed as faults/happens before?
+static int set_trap(eRW readWrite, size_t offset, size_t size, char *info, uint32_t thread_idx) {
     for(int thd_idx = 0; thd_idx < MAX_SHM_TRAPS; thd_idx++) {
         sThreadTrapInfo *thd_trap_info = &(shm_trapper.thread_trap_info[thd_idx]);
-        if(0 == thd_trap_info->threadId) {
-            thd_trap_info->threadId = pthread_self();
+        if(0 == thd_trap_info->thread_idx) {
+            thd_trap_info->thread_idx = thread_idx;//1 index the thread numbers for reporting
             thd_trap_info->trap_type = readWrite + 1;
             thd_trap_info->trap_offsets[TRAP_HIGH] = offset + size - 1;
             thd_trap_info->trap_offsets[TRAP_LOW] = offset;
@@ -138,10 +200,10 @@ static int set_trap(eRW readWrite, size_t offset,
     }
     return 0;
 }
-static void clear_traps() {
+static void clear_traps(uint32_t thread_idx) {
     for(int thd_idx = 0; thd_idx < MAX_SHM_TRAPS; thd_idx++) {
         sThreadTrapInfo *thd_trap_info = &(shm_trapper.thread_trap_info[thd_idx]);
-        if(pthread_self() == thd_trap_info->threadId) {
+        if(thread_idx == thd_trap_info->thread_idx) {
             memset(thd_trap_info, 0, sizeof(sThreadTrapInfo));
         }
     }
@@ -153,28 +215,34 @@ void clearall_traps() {
 void clearall_loghashes() {
     HASH_CLEAR(hh, logged_hazards);
 }
+//TODO: Have shm_op take a thread context variable
+//TODO: pthread_self() is not scalable for analysis across runs
 eSHMRC shm_op(eRW readWrite, void *buf,
               size_t buf_size, size_t offset,
-              size_t size, char *info) {
-    if(!info) {
+              size_t size, char *info, uint32_t thd_idx) {
+    if(!info || !buf) {
         return SHM_RC_FAIL;
     } else if(0 == buf_size || 0 == size) {
         return SHM_RC_FAIL;
     } else {
         int sleep_time = 0;
+        thd_idx++;//increment the thd_idx by 1 for SHM
         pthread_mutex_lock(&shm_mutex);
-        //near miss is from perspective of SHM_OP triggering a trap
-        //for near miss do a hash table of shared memory regions that were previously accessed
-        //within each entry have file/func/line thread meta-data
-        //TODO: log shm access time, thread, file/func/line(for use with near miss calculation)
-        find_trap_violations(readWrite, offset, size, info);
-        //TODO: find_near_misses(readWrite, offset, size, file, func, line);
+        find_trap_violations(readWrite, offset, size, info, thd_idx);
+        flush_access_log();
+        //after this point the timing threshold for near miss is already established
+        //all that's left to do is scan the access log for offsets that match with one op a write
+        //find_near_misses(readWrite, offset, size, info);
+        //near miss is caused by this thread, but other thread should be taking action from it
+        //therefore near miss needs to be logged from perspective of effected thread
+        log_access(readWrite, offset, size, info, thd_idx);
+        print_access_log();
         if(SHM_READ == readWrite) {//true is read
             memcpy(buf, (void *) &(shm_master) + offset, MIN(size, buf_size));
         } else if(SHM_WRITE == readWrite) {//false is write
             memcpy((void *) &(shm_master) + offset, buf, MIN(size, buf_size));
         }
-        sleep_time = set_trap(readWrite, offset, size, info);
+        sleep_time = set_trap(readWrite, offset, size, info, thd_idx);
         pthread_mutex_unlock(&shm_mutex);
 
         if(sleep_time) {
@@ -182,7 +250,7 @@ eSHMRC shm_op(eRW readWrite, void *buf,
         }
 
         pthread_mutex_lock(&shm_mutex);
-        clear_traps();
+        clear_traps(thd_idx);
         pthread_mutex_unlock(&shm_mutex);
         return SHM_RC_OK;
     }
