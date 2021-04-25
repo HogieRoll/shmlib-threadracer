@@ -12,7 +12,7 @@
 
 #define MS_SEC_CONVERSION 1000000
 #define NEAR_MISS_THRESHOLD 5 * MS_SEC_CONVERSION//useconds
-#define DEFAULT_DELAY 100//useconds
+#define DEFAULT_DELAY 0//useconds
 
 #include <stdbool.h>
 #include <pthread.h>
@@ -43,7 +43,7 @@ typedef struct {
     uint32_t thread_idx;
     size_t shm_offsets[NUM_TRAP_RANGES];
     eRW rw;
-    char *info;
+    char info[200];
     uint64_t access_time_s;//time in seconds
     uint64_t access_time_us;//time in useconds
 }sSHMAccessLog;

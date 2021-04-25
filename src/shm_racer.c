@@ -23,7 +23,7 @@ sem_t x_to_y_mutex;
 volatile int running_threads = 0;
 
 void empty(void *args) {
-    printf("Here\n");
+    //printf("Here\n");
 }
 void readValue(void *args) {
     int tmp = 0;
@@ -101,7 +101,6 @@ static inline void Xcrement_thread_count(bool increment) {
 }
 
 void *pthread_helper(void *args) {
-    printf("In Pthread_helper\n");
     sThreadArgs *th_args = (sThreadArgs *) args; 
     sPthreadHelper *pth_helper = (sPthreadHelper *) th_args->pth_link;
     pth_helper->start_routine((void *)&(th_args->thd_idx));
@@ -161,7 +160,7 @@ static sThreadSet threadset_table[NUM_THREAD_SETS] = {
     THREAD_SET_BUILDER(THREAD_SET_READ_RACE_DOUBLE, 60)
         THREAD_FUNC_BUILDER(0, RUN_FUNC_READ_RACE),
         THREAD_FUNC_BUILDER(1, RUN_FUNC_READ_RACE)
-    },*/
+    },
     THREAD_SET_BUILDER(THREAD_SET_RMW_RACE_DOUBLE, 20)
         THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_RACE),
         THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_RACE)
@@ -177,18 +176,18 @@ static sThreadSet threadset_table[NUM_THREAD_SETS] = {
     THREAD_SET_BUILDER(THREAD_SET_RMW_HB_FAKE, 20)
         THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_FIRST),
         THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_FAKE_SECOND)
-    }/*,
+    },
     THREAD_SET_BUILDER(THREAD_SET_MAILMAN, 100)
         THREAD_FUNC_BUILDER(0, RUN_FUNC_MAILMAN),
         THREAD_FUNC_BUILDER(1, RUN_FUNC_MAILCUSTOMER)
-    },
+    },*/
     THREAD_SET_BUILDER(THREAD_SET_RMW_RACE_MAX, 100)
         THREAD_FUNC_BUILDER(0, RUN_FUNC_RMW_RACE),
         THREAD_FUNC_BUILDER(1, RUN_FUNC_RMW_RACE),
         THREAD_FUNC_BUILDER(2, RUN_FUNC_RMW_RACE),
         THREAD_FUNC_BUILDER(3, RUN_FUNC_RMW_RACE),
         THREAD_FUNC_BUILDER(4, RUN_FUNC_RMW_RACE)
-    }*/
+    }
 };
 const char * get_thread_set_str(eThreadSet thd_set_idx) {
     return threadset_table[thd_set_idx].set_str;
@@ -221,8 +220,6 @@ static void init_locks() {
 }
 static void spawn_thread_set(sThreadSet *thd_set) {
     clearall_traps();
-    clearall_loghashes();
-    reset_access_log();
     for(int thd_idx = 0; thd_idx < MAX_SUPPORTED_THREADS; thd_idx++) {
         sThreadInfo *thd_info = &(thd_set->threadInfo[thd_idx]);
         thd_info->threadId = 0;
@@ -263,16 +260,21 @@ int main() {
     init_locks();
     for(eThreadSet thd_set_idx = 0; thd_set_idx < NUM_THREAD_SETS; thd_set_idx++) {
         sThreadSet *thd_set = &(threadset_table[thd_set_idx]);
-        eWaitThreadSetRC wait_status = WAIT_THREAD_SET_OK;
-        uint32_t runtime_counter = 0;
-        spawn_thread_set(thd_set);
-        if(WAIT_THREAD_SET_OK == (wait_status = wait_thread_set(thd_set, &runtime_counter))) {
-            printf("SETCOMPLETE:%s:%d\n",get_thread_set_str(thd_set_idx),runtime_counter);
-        } else if(WAIT_THREAD_SET_TIMEOUT == wait_status) {
-            printf("SETCOMPLETE_TO:%s:%d\n",get_thread_set_str(thd_set_idx),runtime_counter);
-        } else {
-            printf("FAILURE_WAIT\n");
-            return -1;
+        clearall_loghashes();
+        reset_access_log();
+        for(int try_idx = 0; try_idx < 6; try_idx++) {
+            eWaitThreadSetRC wait_status = WAIT_THREAD_SET_OK;
+            uint32_t runtime_counter = 0;
+    
+            spawn_thread_set(thd_set);
+            if(WAIT_THREAD_SET_OK == (wait_status = wait_thread_set(thd_set, &runtime_counter))) {
+                printf("SETCOMPLETE:%s:%d\n",get_thread_set_str(thd_set_idx),runtime_counter);
+            } else if(WAIT_THREAD_SET_TIMEOUT == wait_status) {
+                printf("SETCOMPLETE_TO:%s:%d\n",get_thread_set_str(thd_set_idx),runtime_counter);
+            } else {
+                printf("FAILURE_WAIT\n");
+                return -1;
+            }
         }
     }
 }
