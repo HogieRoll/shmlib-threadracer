@@ -10,6 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <uthash.h>
+#include <math.h>
 #include "shmlib.h"
 
 
@@ -120,6 +121,7 @@ struct HashNMHazard {
     uint32_t thread_idx;
     int count;
     uint64_t avg_delay_us;
+    uint32_t decay_func_factor;
     UT_hash_handle hh;
 };
 
@@ -252,9 +254,12 @@ static void nm_violation_logger(eRaceViolationType race_violation_type, sSHMAcce
         if(NULL == (nm_hazard = find_nm_hazards(msg_key))) {
             add_nm_hazard(msg_key, delta_us, shm_access_log->info, shm_access_log->thread_idx);
             nm_hazard = find_nm_hazards(msg_key);
+            nm_hazard->decay_func_factor = 0;
         } else {
             nm_hazard->avg_delay_us += ((int64_t)(delta_us - nm_hazard->avg_delay_us))/(nm_hazard->count + 1);
             nm_hazard->count = nm_hazard->count + 1;
+            //reset decay function
+            nm_hazard->decay_func_factor = 0;
         }
     }
 }
@@ -312,13 +317,16 @@ static int set_trap(eRW readWrite, size_t offset, size_t size, char *info, uint3
                 if(0 == strcmp(thd_trap_info->info, current_nm_hazard->src)
                 && (thread_idx == current_nm_hazard->thread_idx)) {
                     //printf("Found NM Hazard[%s], for [%s]\n",current_nm_hazard->src, info);
-                    int64_t delay_diff = ((int64_t)(current_nm_hazard->avg_delay_us - avg_delay) / (nm_count + 1));
-                    avg_delay = avg_delay + delay_diff;
+                    uint64_t current_avg_delay_us = current_nm_hazard->avg_delay_us;
+                    current_avg_delay_us = (current_avg_delay_us)/(pow((double)3, current_nm_hazard->decay_func_factor)); 
+                    int64_t delay_diff = ((int64_t)(current_avg_delay_us - avg_delay) / (nm_count + 1));
+                    avg_delay = (avg_delay + delay_diff);
+                    current_nm_hazard->decay_func_factor++;
                     nm_count++;
                 }
             }
             //printf("Avg Delay: %lu\n",avg_delay);
-            return (nm_count > 0) ? avg_delay : DEFAULT_DELAY;
+            return DEFAULT_DELAY;//(nm_count > 0) ? avg_delay : DEFAULT_DELAY;
         }
     }
     return 0;
@@ -338,6 +346,16 @@ void clearall_traps() {
 void clearall_loghashes() {
     HASH_CLEAR(hh, logged_hazards);
     HASH_CLEAR(hh, nm_hazards);
+}
+void reset_nm_decays() {
+    if(!nm_hazards) {
+        return;
+    } else {
+        struct HashNMHazard *current_nm_hazard, *tmp;
+        HASH_ITER(hh, nm_hazards, current_nm_hazard, tmp) {
+            current_nm_hazard->decay_func_factor = 0;
+        }
+    }
 }
 //TODO: Have shm_op take a thread context variable
 //TODO: pthread_self() is not scalable for analysis across runs
@@ -366,6 +384,7 @@ eSHMRC shm_op(eRW readWrite, void *buf,
         pthread_mutex_unlock(&shm_mutex);
 
         if(sleep_time) {
+            //printf("Sleeping %d\n",sleep_time);
             usleep(sleep_time);
         }
 

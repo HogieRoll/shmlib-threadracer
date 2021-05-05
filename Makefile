@@ -4,7 +4,7 @@ CFLAGS=-I$(IDIR)
 
 ODIR=build
 OBJ=shm_racer.o shmlib.o
-LIBS=-lpthread -lbsd
+LIBS=-lpthread -lbsd -lm
 
 %.o: src/%.c $(DEPS)
 	$(CC) -c -o $@ $< $(CFLAGS) $(LIBS)

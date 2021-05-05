@@ -12,7 +12,7 @@
 
 #define MS_SEC_CONVERSION 1000000
 #define NEAR_MISS_THRESHOLD 5 * MS_SEC_CONVERSION//useconds
-#define DEFAULT_DELAY 0//useconds
+#define DEFAULT_DELAY 1 * MS_SEC_CONVERSION//useconds
 
 #include <stdbool.h>
 #include <pthread.h>
@@ -95,5 +95,6 @@ static char *get_info_str(char *info_str, const char* file, const char* func, in
 void clearall_traps();
 void clearall_loghashes();
 void reset_access_log();
+void reset_nm_decays();
 
 #endif
