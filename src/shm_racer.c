@@ -39,7 +39,6 @@ void setValue(void *args) {
 }
 void setValue_safe(void *args) {
     pthread_mutex_lock(&shm_access_mutex);
-    printf("Acquired Mutex\n");
     setValue(args);
     pthread_mutex_unlock(&shm_access_mutex);
 }
@@ -257,13 +256,14 @@ static eWaitThreadSetRC wait_thread_set(sThreadSet *thd_set, uint32_t *runtime_c
     }
     return WAIT_THREAD_SET_OK;
 }
+#define CYCLE_COUNT 2
 int main() {
     init_locks();
     for(eThreadSet thd_set_idx = 0; thd_set_idx < NUM_THREAD_SETS; thd_set_idx++) {
         sThreadSet *thd_set = &(threadset_table[thd_set_idx]);
         clearall_loghashes();
         reset_access_log();
-        for(int try_idx = 0; try_idx < 1; try_idx++) {
+        for(int try_idx = 0; try_idx < CYCLE_COUNT; try_idx++) {
             eWaitThreadSetRC wait_status = WAIT_THREAD_SET_OK;
             uint32_t runtime_counter = 0;
     

@@ -12,7 +12,7 @@
 
 #define MS_SEC_CONVERSION 1000000
 #define NEAR_MISS_THRESHOLD 5 * MS_SEC_CONVERSION//useconds
-#define DEFAULT_DELAY 1 * MS_SEC_CONVERSION//useconds
+#define DEFAULT_DELAY 0//useconds
 
 #include <stdbool.h>
 #include <pthread.h>

@@ -316,7 +316,6 @@ static int set_trap(eRW readWrite, size_t offset, size_t size, char *info, uint3
             HASH_ITER(hh, nm_hazards, current_nm_hazard, tmp) {
                 if(0 == strcmp(thd_trap_info->info, current_nm_hazard->src)
                 && (thread_idx == current_nm_hazard->thread_idx)) {
-                    //printf("Found NM Hazard[%s], for [%s]\n",current_nm_hazard->src, info);
                     uint64_t current_avg_delay_us = current_nm_hazard->avg_delay_us;
                     current_avg_delay_us = (current_avg_delay_us)/(pow((double)3, current_nm_hazard->decay_func_factor)); 
                     int64_t delay_diff = ((int64_t)(current_avg_delay_us - avg_delay) / (nm_count + 1));
@@ -325,8 +324,7 @@ static int set_trap(eRW readWrite, size_t offset, size_t size, char *info, uint3
                     nm_count++;
                 }
             }
-            //printf("Avg Delay: %lu\n",avg_delay);
-            return DEFAULT_DELAY;//(nm_count > 0) ? avg_delay : DEFAULT_DELAY;
+            return (nm_count > 0) ? avg_delay : DEFAULT_DELAY;
         }
     }
     return 0;
